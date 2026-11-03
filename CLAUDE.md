@@ -12,9 +12,16 @@
 
 ## Validation
 
-No project toolchain exists yet. When one is added, document the exact
-install, lint, typecheck, test, and build commands here and keep the
-`Validate` step of `.github/workflows/agent.yml` in sync.
+Toolchain: Bun 1.3.0 and TypeScript (strict). Lockfile: `bun.lock`.
+
+- Install: `bun install --frozen-lockfile`
+- Lint: `bun run lint` (Biome check, does not write)
+- Typecheck: `bun run typecheck`
+- Test: `bun test`
+- Build: none yet (nothing is compiled or bundled)
+
+The `Validate` step of `.github/workflows/agent.yml` runs these same commands.
+Keep them in sync.
 
 ## Repo purpose
 
@@ -39,7 +46,7 @@ not run on the n8n host, and no self-hosted runner is used.
 - Planned work lives in GitHub issues in this repo. Each issue is one unit of work and maps to one agent run and one draft PR.
 - The `agent-ready` label on an issue is the only trigger for automated work. n8n must check that the user who added it has write access before dispatching.
 - A run claims its branch `agent/<slug>` with a plain push before any edits. If that push is rejected, another run owns the branch and this run must stop without changing anything.
-- Run state is recorded in MongoDB (`software_factory.agent_runs`, one document per GitHub run id): status, issue number, branch, PR URL, and timestamps. It holds run metadata only, never prompts, Claude output, or issue bodies. The tracker is `scripts/track-run.cjs`.
+- Run state is recorded in MongoDB (`software_factory.agent_runs`, one document per GitHub run id): status, issue number, branch, PR URL, and timestamps. It holds run metadata only, never prompts, Claude output, or issue bodies. The tracker is `scripts/track-run.ts`.
 - Agents working on this repo run on GitHub-hosted runners. Work is done there, not on a developer machine.
 - A PR for an issue should state the issue number (for example `Refs #12`) in its body. Use `Closes #N` only when a human should close the issue on merge.
 - Do not create extra issues to split work unless the issue asks for it. Stop and report instead.

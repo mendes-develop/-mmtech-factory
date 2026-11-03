@@ -39,6 +39,7 @@ permissions:
 
 env:
   CLAUDE_CODE_VERSION: "2.1.317"
+  BUN_VERSION: "1.3.0"
 
 jobs:
   track-start:
@@ -51,26 +52,25 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: "22"
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Install tracker driver
+      - name: Install dependencies
         continue-on-error: true
-        run: npm install --prefix "$RUNNER_TEMP/tracker" --no-save mongodb@6
+        run: bun install --frozen-lockfile
 
       - name: Record run start
         continue-on-error: true
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          NODE_PATH: ${{ runner.temp }}/tracker/node_modules
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           BRANCH: agent/${{ inputs.branch_suffix }}
           TASK: ${{ inputs.task }}
           ACTOR: ${{ github.actor }}
-        run: node scripts/track-run.cjs start
+        run: bun scripts/track-run.ts start
 
   implement:
     needs: track-start
@@ -89,6 +89,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install Claude Code CLI
         run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
@@ -143,14 +147,13 @@ jobs:
           fi
 
       - name: Validate
+        # Same commands as CLAUDE.md "Validation". Frozen lockfile: the agent
+        # cannot change dependencies without also committing bun.lock.
         run: |
-          # Phase A repo has no toolchain yet. Add real commands here once a
-          # project exists (see CLAUDE.md "Validation").
-          if [ -f package.json ]; then
-            echo "package.json found: add install/lint/test/build steps here." >&2
-            exit 1
-          fi
-          echo "No project toolchain present; skipping validation."
+          bun install --frozen-lockfile
+          bun run lint
+          bun run typecheck
+          bun test
 
       - name: Commit, push, open draft PR
         id: pr
@@ -196,19 +199,18 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: "22"
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Install tracker driver
+      - name: Install dependencies
         continue-on-error: true
-        run: npm install --prefix "$RUNNER_TEMP/tracker" --no-save mongodb@6
+        run: bun install --frozen-lockfile
 
       - name: Record run result
         continue-on-error: true
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          NODE_PATH: ${{ runner.temp }}/tracker/node_modules
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
@@ -217,4 +219,4 @@ jobs:
           ACTOR: ${{ github.actor }}
           STATUS: ${{ needs.implement.result }}
           PR_URL: ${{ needs.implement.outputs.pr_url }}
-        run: node scripts/track-run.cjs finish
+        run: bun scripts/track-run.ts finish
