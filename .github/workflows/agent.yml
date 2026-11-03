@@ -2,7 +2,10 @@ name: Agent task (Phase A)
 
 # Manual proof of concept: a human dispatches a task, Claude Code edits the
 # repo on a fresh branch, and a DRAFT PR is opened for human review.
-# Never auto-merges. Linear / n8n integration comes later.
+# Never auto-merges. n8n dispatches this workflow later (see CLAUDE.md).
+#
+# Run tracking happens in two jobs that check out the default branch, not the
+# agent branch, so the agent cannot change the code that runs with MONGODB_URI.
 
 on:
   workflow_dispatch:
@@ -15,6 +18,11 @@ on:
         description: Short slug for the agent branch (agent/<slug>)
         required: true
         type: string
+      issue_number:
+        description: GitHub issue number this run is for (optional; digits only)
+        required: false
+        type: string
+        default: ""
       allow_workflow_changes:
         description: Allow the agent to modify .github/ (default false)
         required: false
@@ -33,11 +41,45 @@ env:
   CLAUDE_CODE_VERSION: "2.1.317"
 
 jobs:
+  track-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install tracker driver
+        continue-on-error: true
+        run: npm install --prefix "$RUNNER_TEMP/tracker" --no-save mongodb@6
+
+      - name: Record run start
+        continue-on-error: true
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          NODE_PATH: ${{ runner.temp }}/tracker/node_modules
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          BRANCH: agent/${{ inputs.branch_suffix }}
+          TASK: ${{ inputs.task }}
+          ACTOR: ${{ github.actor }}
+        run: node scripts/track-run.cjs start
+
   implement:
+    needs: track-start
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Secrets (ANTHROPIC_API_KEY) live in this environment, not at repo level.
     environment: main
+    outputs:
+      pr_url: ${{ steps.pr.outputs.url }}
 
     steps:
       - uses: actions/checkout@v4
@@ -54,15 +96,29 @@ jobs:
       - name: Create agent branch
         env:
           SLUG: ${{ inputs.branch_suffix }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
         run: |
           # Accept only a safe slug so the branch name cannot inject anything.
           if [[ ! "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,48}$ ]]; then
             echo "branch_suffix must match ^[a-z0-9][a-z0-9-]{0,48}$" >&2
             exit 1
           fi
+          if [[ ! "$ISSUE_NUMBER" =~ ^[0-9]*$ ]]; then
+            echo "issue_number must be digits only" >&2
+            exit 1
+          fi
           git checkout -b "agent/${SLUG}"
           git config user.name "Software Factory"
           git config user.email "software-factory@users.noreply.github.com"
+
+      - name: Claim agent branch
+        env:
+          SLUG: ${{ inputs.branch_suffix }}
+        run: |
+          # Atomic claim: a plain (non-force) push fails if another run already
+          # pushed agent/<slug>, so only one run per slug proceeds. Never force.
+          git commit --allow-empty -m "claim agent/${SLUG} (run ${GITHUB_RUN_ID})"
+          git push origin "HEAD:refs/heads/agent/${SLUG}"
 
       - name: Run Claude Code
         env:
@@ -97,19 +153,25 @@ jobs:
           echo "No project toolchain present; skipping validation."
 
       - name: Commit, push, open draft PR
+        id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           SLUG: ${{ inputs.branch_suffix }}
           TASK: ${{ inputs.task }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
         run: |
           git add -A
           if git diff --cached --quiet; then
             echo "Agent made no changes; no PR created." >&2
             exit 1
           fi
+          REF=""
+          if [ -n "$ISSUE_NUMBER" ]; then
+            REF="Refs #${ISSUE_NUMBER}"
+          fi
           git commit -m "agent(${SLUG}): ${TASK:0:72}"
           git push -u origin "HEAD:agent/${SLUG}"
-          gh pr create \
+          PR_URL=$(gh pr create \
             --draft \
             --base "${{ github.event.repository.default_branch }}" \
             --head "agent/${SLUG}" \
@@ -117,5 +179,42 @@ jobs:
             --body "Automated draft PR from Phase A workflow run ${{ github.run_id }}.
 
           Task: ${TASK}
+          ${REF}
 
-          Review and validate before merging. Nothing has been merged automatically."
+          Review and validate before merging. Nothing has been merged automatically.")
+          echo "url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+  track-finish:
+    needs: implement
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: main
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install tracker driver
+        continue-on-error: true
+        run: npm install --prefix "$RUNNER_TEMP/tracker" --no-save mongodb@6
+
+      - name: Record run result
+        continue-on-error: true
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          NODE_PATH: ${{ runner.temp }}/tracker/node_modules
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          BRANCH: agent/${{ inputs.branch_suffix }}
+          TASK: ${{ inputs.task }}
+          ACTOR: ${{ github.actor }}
+          STATUS: ${{ needs.implement.result }}
+          PR_URL: ${{ needs.implement.outputs.pr_url }}
+        run: node scripts/track-run.cjs finish
