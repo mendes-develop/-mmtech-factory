@@ -9,3 +9,7 @@ Agent instructions live in `CLAUDE.md`. The workflow that runs agents is in `.gi
 ## Run tracking
 
 Every agent run is recorded in the MongoDB collection `software_factory.agent_runs`.
+
+## Phase A proof
+
+This change was produced by a dispatched agent run for issue #7.
