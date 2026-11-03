@@ -1,0 +1,121 @@
+name: Agent task (Phase A)
+
+# Manual proof of concept: a human dispatches a task, Claude Code edits the
+# repo on a fresh branch, and a DRAFT PR is opened for human review.
+# Never auto-merges. Linear / n8n integration comes later.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Plain-language task for the agent
+        required: true
+        type: string
+      branch_suffix:
+        description: Short slug for the agent branch (agent/<slug>)
+        required: true
+        type: string
+      allow_workflow_changes:
+        description: Allow the agent to modify .github/ (default false)
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: agent-${{ inputs.branch_suffix }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.317"
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Secrets (ANTHROPIC_API_KEY) live in this environment, not at repo level.
+    environment: main
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Create agent branch
+        env:
+          SLUG: ${{ inputs.branch_suffix }}
+        run: |
+          # Accept only a safe slug so the branch name cannot inject anything.
+          if [[ ! "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,48}$ ]]; then
+            echo "branch_suffix must match ^[a-z0-9][a-z0-9-]{0,48}$" >&2
+            exit 1
+          fi
+          git checkout -b "agent/${SLUG}"
+          git config user.name "Software Factory"
+          git config user.email "software-factory@users.noreply.github.com"
+
+      - name: Run Claude Code
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TASK: ${{ inputs.task }}
+        run: |
+          # TASK is passed via env, never interpolated into the shell script.
+          claude -p "$TASK" \
+            --permission-mode acceptEdits \
+            --allowedTools "Read,Edit,Write,Glob,Grep" \
+            --max-turns 40 \
+            --output-format text
+
+      - name: Guard against workflow/security changes
+        env:
+          ALLOW: ${{ inputs.allow_workflow_changes }}
+        run: |
+          if [ "$ALLOW" != "true" ] && git status --porcelain -- .github/ | grep -q .; then
+            echo "Agent modified .github/ without allow_workflow_changes. Aborting." >&2
+            git status --porcelain -- .github/
+            exit 1
+          fi
+
+      - name: Validate
+        run: |
+          # Phase A repo has no toolchain yet. Add real commands here once a
+          # project exists (see CLAUDE.md "Validation").
+          if [ -f package.json ]; then
+            echo "package.json found: add install/lint/test/build steps here." >&2
+            exit 1
+          fi
+          echo "No project toolchain present; skipping validation."
+
+      - name: Commit, push, open draft PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLUG: ${{ inputs.branch_suffix }}
+          TASK: ${{ inputs.task }}
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Agent made no changes; no PR created." >&2
+            exit 1
+          fi
+          git commit -m "agent(${SLUG}): ${TASK:0:72}"
+          git push -u origin "HEAD:agent/${SLUG}"
+          gh pr create \
+            --draft \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "agent/${SLUG}" \
+            --title "agent(${SLUG}): ${TASK:0:60}" \
+            --body "Automated draft PR from Phase A workflow run ${{ github.run_id }}.
+
+          Task: ${TASK}
+
+          Review and validate before merging. Nothing has been merged automatically."
