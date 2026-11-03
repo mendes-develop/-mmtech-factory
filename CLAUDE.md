@@ -48,6 +48,7 @@ not run on the n8n host, and no self-hosted runner is used.
 - A run claims its branch `agent/<slug>` with a plain push before any edits. If that push is rejected, another run owns the branch and this run must stop without changing anything.
 - Run state is recorded in MongoDB (`software_factory.agent_runs`, one document per GitHub run id): status, issue number, branch, PR URL, and timestamps. It holds run metadata only, never prompts, Claude output, or issue bodies. The tracker is `scripts/track-run.ts`.
 - Agents working on this repo run on GitHub-hosted runners. Work is done there, not on a developer machine.
+- A run can target another repo with `target_repo` (owner/name). The target's own `CLAUDE.md` and validation command govern the change. The run pushes with `FACTORY_TARGET_TOKEN`, which is never given to Claude. Without `validate_command`, changes are reported as not validated.
 - A PR for an issue should state the issue number (for example `Refs #12`) in its body. Use `Closes #N` only when a human should close the issue on merge.
 - Do not create extra issues to split work unless the issue asks for it. Stop and report instead.
 

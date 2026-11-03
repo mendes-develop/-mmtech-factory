@@ -6,7 +6,7 @@
 //
 // Usage: bun scripts/track-run.ts start|finish
 // Env:   MONGODB_URI (required; unset means skip), MONGODB_DB (default software_factory),
-//        RUN_ID (required), RUN_URL, ISSUE_NUMBER, BRANCH, TASK, ACTOR,
+//        RUN_ID (required), REPO (target owner/name), RUN_URL, ISSUE_NUMBER, BRANCH, TASK, ACTOR,
 //        STATUS (finish), PR_URL (finish).
 
 import { MongoClient } from "mongodb";
@@ -20,6 +20,7 @@ export function buildUpdate(
 ): Record<string, unknown> {
 	const value = (name: string) => env[name] || null;
 	const common = {
+		repo: value("REPO"),
 		run_url: value("RUN_URL"),
 		issue_number: value("ISSUE_NUMBER"),
 		branch: value("BRANCH"),
