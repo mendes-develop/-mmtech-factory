@@ -36,6 +36,8 @@ jobs:
   implement:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Secrets (ANTHROPIC_API_KEY) live in this environment, not at repo level.
+    environment: main
 
     steps:
       - uses: actions/checkout@v4
