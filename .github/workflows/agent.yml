@@ -99,6 +99,7 @@ jobs:
 
     steps:
       - name: Check inputs and issue gate
+        id: gate
         # Work starts only from an issue: it must be open, be a real issue (not a PR),
         # carry the agent-ready label, not be in progress, and that label must have
         # been added by someone with write access. A validate_command is required.
@@ -129,6 +130,12 @@ jobs:
           fi
 
           REPO="${TARGET:-$DEFAULT_REPO}"
+          # Check out the target's default branch, never the dispatch branch.
+          DEFAULT_BRANCH=$(gh api "repos/${REPO}" -q '.default_branch') || {
+            echo "cannot read ${REPO}" >&2
+            exit 1
+          }
+          echo "default_branch=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
           ISSUE=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}") || {
             echo "issue #${ISSUE_NUMBER} not found in ${REPO}" >&2
             exit 1
@@ -168,6 +175,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ inputs.target_repo || github.repository }}
+          ref: ${{ steps.gate.outputs.default_branch }}
           token: ${{ secrets.FACTORY_TARGET_TOKEN || github.token }}
           path: target
           fetch-depth: 0
