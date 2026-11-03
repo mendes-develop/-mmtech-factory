@@ -29,12 +29,12 @@ on:
         type: string
         default: ""
       validate_command:
-        description: Shell command run in the target repo to validate changes (empty - none)
+        description: Shell command run in the target repo to validate changes (required)
         required: false
         type: string
         default: ""
       issue_number:
-        description: Issue number in the target repo this run is for (optional; digits only)
+        description: Issue number in the target repo this run is for (required; must be open, labeled agent-ready)
         required: false
         type: string
         default: ""
@@ -98,11 +98,17 @@ jobs:
       pr_url: ${{ steps.pr.outputs.url }}
 
     steps:
-      - name: Check inputs
+      - name: Check inputs and issue gate
+        # Work starts only from an issue: it must be open, be a real issue (not a PR),
+        # carry the agent-ready label, not be in progress, and that label must have
+        # been added by someone with write access. A validate_command is required.
         env:
           TARGET: ${{ inputs.target_repo }}
           SLUG: ${{ inputs.branch_suffix }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
+          VALIDATE_COMMAND: ${{ inputs.validate_command }}
+          GH_TOKEN: ${{ secrets.FACTORY_TARGET_TOKEN || github.token }}
+          DEFAULT_REPO: ${{ github.repository }}
         run: |
           # Accept only safe values; none of these are interpolated into shell code.
           if [ -n "$TARGET" ] && [[ ! "$TARGET" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -113,10 +119,51 @@ jobs:
             echo "branch_suffix must match ^[a-z0-9][a-z0-9-]{0,48}$" >&2
             exit 1
           fi
-          if [[ ! "$ISSUE_NUMBER" =~ ^[0-9]*$ ]]; then
-            echo "issue_number must be digits only" >&2
+          if [[ ! "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "issue_number is required and must be digits: work starts from an issue" >&2
             exit 1
           fi
+          if [ -z "$VALIDATE_COMMAND" ]; then
+            echo "validate_command is required: changes must be validated before a PR" >&2
+            exit 1
+          fi
+
+          REPO="${TARGET:-$DEFAULT_REPO}"
+          ISSUE=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}") || {
+            echo "issue #${ISSUE_NUMBER} not found in ${REPO}" >&2
+            exit 1
+          }
+          if [ "$(jq -r '.state' <<<"$ISSUE")" != "open" ]; then
+            echo "issue #${ISSUE_NUMBER} is not open" >&2
+            exit 1
+          fi
+          if [ "$(jq -r 'has("pull_request")' <<<"$ISSUE")" = "true" ]; then
+            echo "#${ISSUE_NUMBER} is a pull request, not an issue" >&2
+            exit 1
+          fi
+          LABELS=$(jq -r '[.labels[].name] | join(",")' <<<"$ISSUE")
+          case ",${LABELS}," in *,agent-working,*)
+            echo "issue #${ISSUE_NUMBER} is already in progress (agent-working)" >&2
+            exit 1 ;;
+          esac
+          case ",${LABELS}," in *,agent-ready,*) ;; *)
+            echo "issue #${ISSUE_NUMBER} does not have the agent-ready label" >&2
+            exit 1 ;;
+          esac
+
+          # Who added the current agent-ready label? Its most recent labeled event.
+          LABELER=$(gh api --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/events" \
+            -q '.[] | select(.event == "labeled" and .label.name == "agent-ready") | .actor.login' | tail -n 1)
+          if [ -z "$LABELER" ]; then
+            echo "could not find who added agent-ready to #${ISSUE_NUMBER}" >&2
+            exit 1
+          fi
+          PERM=$(gh api "repos/${REPO}/collaborators/${LABELER}/permission" -q '.permission' 2>/dev/null || echo none)
+          case "$PERM" in
+            admin|maintain|write) echo "gate passed: #${ISSUE_NUMBER} labeled by ${LABELER} (${PERM})" ;;
+            *) echo "agent-ready was added by ${LABELER} (${PERM}), which lacks write access" >&2
+               exit 1 ;;
+          esac
 
       - uses: actions/checkout@v4
         with:
