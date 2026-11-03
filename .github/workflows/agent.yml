@@ -97,6 +97,7 @@ jobs:
           echo "No project toolchain present; skipping validation."
 
       - name: Commit, push, open draft PR
+        id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           SLUG: ${{ inputs.branch_suffix }}
@@ -109,7 +110,7 @@ jobs:
           fi
           git commit -m "agent(${SLUG}): ${TASK:0:72}"
           git push -u origin "HEAD:agent/${SLUG}"
-          gh pr create \
+          PR_URL=$(gh pr create \
             --draft \
             --base "${{ github.event.repository.default_branch }}" \
             --head "agent/${SLUG}" \
@@ -118,4 +119,26 @@ jobs:
 
           Task: ${TASK}
 
-          Review and validate before merging. Nothing has been merged automatically."
+          Review and validate before merging. Nothing has been merged automatically.")
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Track run in MongoDB
+        # Runs even if earlier steps failed, so failures are recorded too.
+        # Non-fatal: a tracking outage must not change the agent's result.
+        if: always()
+        continue-on-error: true
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: software_factory
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          BRANCH: agent/${{ inputs.branch_suffix }}
+          COMMIT_SHA: ${{ github.sha }}
+          TASK: ${{ inputs.task }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          RUNNER_TEMP_DIR="${RUNNER_TEMP}/tracker"
+          npm install --prefix "$RUNNER_TEMP_DIR" --no-save --no-audit --no-fund "mongodb@7.8.0"
+          NODE_PATH="$RUNNER_TEMP_DIR/node_modules" node scripts/track-run.cjs
