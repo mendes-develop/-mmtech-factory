@@ -45,9 +45,11 @@ not run on the n8n host, and no self-hosted runner is used.
 
 - Planned work lives in GitHub issues in this repo. Each issue is one unit of work and maps to one agent run and one draft PR.
 - The `agent-ready` label on an issue is the only trigger for automated work. n8n must check that the user who added it has write access before dispatching.
+- Gate, enforced in `agent.yml` before any edit: a run needs an `issue_number` for an open issue (not a PR) that has `agent-ready`, does not have `agent-working`, and whose label was added by a user with write access. A `validate_command` is also required. Runs without these fail at the gate. Docs-only test runs are not allowed.
 - A run claims its branch `agent/<slug>` with a plain push before any edits. If that push is rejected, another run owns the branch and this run must stop without changing anything.
 - Run state is recorded in MongoDB (`software_factory.agent_runs`, one document per GitHub run id): status, issue number, branch, PR URL, and timestamps. It holds run metadata only, never prompts, Claude output, or issue bodies. The tracker is `scripts/track-run.ts`.
 - Agents working on this repo run on GitHub-hosted runners. Work is done there, not on a developer machine.
+- A run can target another repo with `target_repo` (owner/name). The target's own `CLAUDE.md` and validation command govern the change. The run pushes with `FACTORY_TARGET_TOKEN`, which is never given to Claude. Without `validate_command`, changes are reported as not validated.
 - A PR for an issue should state the issue number (for example `Refs #12`) in its body. Use `Closes #N` only when a human should close the issue on merge.
 - Do not create extra issues to split work unless the issue asks for it. Stop and report instead.
 
